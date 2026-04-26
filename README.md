@@ -86,6 +86,6 @@ while Round Robin ensures fairness and better response time.
 
 ## 👨‍💻 Author
 
-**Mohamed (bodomohamed)**
+**Abdullah (bodomohamed)**
 
 
