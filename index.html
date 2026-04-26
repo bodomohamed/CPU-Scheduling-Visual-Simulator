@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>CPU Scheduler Pro</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        .gantt-block {
+            transition: all 0.4s ease;
+        }
+
+        .gantt-block:hover {
+            transform: scale(1.1);
+        }
+    </style>
+
+</head>
+
+<body class="bg-slate-900 text-white p-6">
+
+    <h1 class="text-3xl font-bold text-center mb-6">CPU Scheduling Simulator PRO</h1>
+
+    <!-- INPUT -->
+    <div class="bg-slate-800 p-4 rounded-xl">
+        <input id="pid" placeholder="ID" class="text-black p-2">
+        <input id="arrival" placeholder="Arrival" class="text-black p-2">
+        <input id="burst" placeholder="Burst" class="text-black p-2">
+        <button onclick="addProcess()" class="bg-blue-500 px-3 py-2 rounded">Add</button>
+
+        <input id="quantum" placeholder="Quantum" class="text-black p-2 ml-4">
+
+        <button onclick="run()" class="bg-green-500 px-3 py-2 rounded ml-2">Run</button>
+    </div>
+
+    <!-- SCENARIOS -->
+    <div class="mt-4">
+        <button onclick="loadScenario('A')" class="bg-purple-500 px-3 py-2">Scenario A</button>
+        <button onclick="loadScenario('B')" class="bg-purple-500 px-3 py-2">Scenario B</button>
+        <button onclick="loadScenario('D')" class="bg-purple-500 px-3 py-2">Scenario D</button>
+    </div>
+
+    <!-- TABLE -->
+    <table class="mt-4 w-full text-center border">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>AT</th>
+                <th>BT</th>
+            </tr>
+        </thead>
+        <tbody id="ptable"></tbody>
+    </table>
+
+    <!-- GANTT -->
+    <h2 class="mt-6">Round Robin</h2>
+    <div id="rrGantt" class="flex"></div>
+
+    <h2 class="mt-6">SJF</h2>
+    <div id="sjfGantt" class="flex"></div>
+
+    <!-- CHART -->
+    <canvas id="chart" class="mt-6"></canvas>
+
+    <!-- RESULTS -->
+    <div id="results" class="mt-4"></div>
+
+    <!-- ACTIONS -->
+    <div class="mt-4">
+        <button onclick="analyze()" class="bg-yellow-500 px-3 py-2">Compare Winner</button>
+        <button onclick="exportPDF()" class="bg-red-500 px-3 py-2 ml-2">Export PDF</button>
+    </div>
+
+    <script>
+
+        let processes = [];
+
+        function addProcess() {
+            processes.push({
+                id: document.getElementById("pid").value,
+                arrival: +arrival.value,
+                burst: +burst.value
+            });
+            render();
+        }
+
+        function render() {
+            let html = "";
+            processes.forEach(p => {
+                html += `<tr><td>${p.id}</td><td>${p.arrival}</td><td>${p.burst}</td></tr>`;
+            });
+            ptable.innerHTML = html;
+        }
+
+        function clone() { return JSON.parse(JSON.stringify(processes)); }
+
+        // SJF
+        function sjf(proc) {
+            let t = 0, done = [], ready = [];
+            proc.sort((a, b) => a.arrival - b.arrival);
+
+            while (proc.length || ready.length) {
+                while (proc.length && proc[0].arrival <= t) ready.push(proc.shift());
+
+                if (ready.length) {
+                    ready.sort((a, b) => a.burst - b.burst);
+                    let p = ready.shift();
+                    p.start = t;
+                    t += p.burst;
+                    p.completion = t;
+                    done.push(p);
+                } else t++;
+            }
+            return done;
+        }
+
+        // RR
+        function rr(proc, q) {
+            let t = 0, qe = [], done = [];
+            proc.sort((a, b) => a.arrival - b.arrival);
+
+            proc.forEach(p => { p.remaining = p.burst; p.started = false; });
+
+            let i = 0;
+
+            while (qe.length || i < proc.length) {
+                while (i < proc.length && proc[i].arrival <= t) qe.push(proc[i++]);
+
+                if (qe.length) {
+                    let p = qe.shift();
+
+                    if (!p.started) { p.start = t; p.started = true; }
+
+                    let ex = Math.min(q, p.remaining);
+                    t += ex;
+                    p.remaining -= ex;
+
+                    while (i < proc.length && proc[i].arrival <= t) qe.push(proc[i++]);
+
+                    if (p.remaining > 0) qe.push(p);
+                    else { p.completion = t; done.push(p); }
+                } else t++;
+            }
+            return done;
+        }
+
+        // metrics
+        function calc(p) {
+            let wt = 0, tat = 0, rt = 0;
+            p.forEach(x => {
+                x.TAT = x.completion - x.arrival;
+                x.WT = x.TAT - x.burst;
+                x.RT = x.start - x.arrival;
+                wt += x.WT; tat += x.TAT; rt += x.RT;
+            });
+            return { wt: wt / p.length, tat: tat / p.length, rt: rt / p.length };
+        }
+
+        // gantt
+        function draw(id, data) {
+            let div = document.getElementById(id);
+            div.innerHTML = "";
+            data.forEach(p => {
+                let d = document.createElement("div");
+                d.className = "gantt-block bg-blue-600 p-3 m-1 rounded";
+                d.innerText = "P" + p.id;
+                div.appendChild(d);
+            });
+        }
+
+        // run
+        let rrM, sjfM;
+
+        function run() {
+            let q = +quantum.value;
+            if (q <= 0) { alert("Invalid Quantum"); return; }
+
+            let r = rr(clone(), q);
+            let s = sjf(clone());
+
+            drawTimeline("rrGantt", r);
+            drawTimeline("sjfGantt", s);
+
+            rrM = calc(r);
+            sjfM = calc(s);
+
+            results.innerHTML = `
+RR → WT:${rrM.wt.toFixed(2)} TAT:${rrM.tat.toFixed(2)} RT:${rrM.rt.toFixed(2)}<br>
+SJF → WT:${sjfM.wt.toFixed(2)} TAT:${sjfM.tat.toFixed(2)} RT:${sjfM.rt.toFixed(2)}
+`;
+
+            drawChart();
+        }
+
+        // chart
+        function drawChart() {
+            new Chart(document.getElementById("chart"), {
+                type: 'line',
+                data: {
+                    labels: ["WT", "TAT", "RT"],
+                    datasets: [
+                        {
+                            label: "Round Robin",
+                            data: [rrM.wt, rrM.tat, rrM.rt],
+                            tension: 0.4
+                        },
+                        {
+                            label: "SJF",
+                            data: [sjfM.wt, sjfM.tat, sjfM.rt],
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    plugins: {
+                        legend: { labels: { color: "white" } }
+                    },
+                    scales: {
+                        x: { ticks: { color: "white" } },
+                        y: { ticks: { color: "white" } }
+                    }
+                }
+            });
+        }
+
+        // analysis
+        function analyze() {
+            let msg = "";
+            msg += rrM.wt < sjfM.wt ? "RR better WT<br>" : "SJF better WT<br>";
+            msg += rrM.rt < sjfM.rt ? "RR better RT<br>" : "SJF better RT<br>";
+            msg += "RR is fairer, SJF is more efficient";
+            results.innerHTML += "<br><b>" + msg + "</b>";
+        }
+
+        // scenarios
+        function loadScenario(type) {
+            processes = [];
+            if (type == "A") {
+                processes = [
+                    { id: 1, arrival: 0, burst: 5 },
+                    { id: 2, arrival: 1, burst: 3 },
+                    { id: 3, arrival: 2, burst: 8 },
+                    { id: 4, arrival: 3, burst: 6 }
+                ];
+                quantum.value = 2;
+            }
+            if (type == "B") {
+                processes = [
+                    { id: 1, arrival: 0, burst: 1 },
+                    { id: 2, arrival: 1, burst: 2 },
+                    { id: 3, arrival: 2, burst: 1 }
+                ];
+                quantum.value = 2;
+            }
+            if (type == "D") {
+                processes = [
+                    { id: 1, arrival: 0, burst: 20 },
+                    { id: 2, arrival: 1, burst: 2 },
+                    { id: 3, arrival: 2, burst: 3 }
+                ];
+                quantum.value = 3;
+            }
+            render();
+        }
+
+        // PDF
+        function exportPDF() {
+            const { jsPDF } = window.jspdf;
+            let doc = new jsPDF();
+            doc.text("CPU Scheduling Report", 10, 10);
+            doc.text(results.innerText, 10, 20);
+            doc.save("report.pdf");
+        }
+
+        function drawTimeline(id, data) {
+            let div = document.getElementById(id);
+            div.innerHTML = "";
+
+            data.forEach(p => {
+                let block = document.createElement("div");
+
+                let width = p.burst * 30; // scale الزمن
+
+                block.className = "gantt-block bg-blue-600 text-white text-center m-1 rounded";
+                block.style.width = width + "px";
+
+                block.innerHTML = `
+                <div>P${p.id}</div>
+                <div class="text-xs">${p.start} → ${p.completion}</div>
+                `;
+
+                div.appendChild(block);
+            });
+        }
+
+    </script>
+
+</body>
+
+</html>
